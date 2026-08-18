@@ -1,0 +1,266 @@
+name: Cody Custom Orca Nightly
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/cody_custom_orca_nightly.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+      timezone: 'America/Denver'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cody-custom-orca-nightly
+  cancel-in-progress: true
+
+env:
+  CUSTOM_BRANCH: nightly-h2c-bambu-connect
+  BAMBU_PR: '13811'
+
+jobs:
+  build_windows:
+    name: Refresh + Build Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout latest official OrcaSlicer main
+        uses: actions/checkout@v7
+        with:
+          repository: OrcaSlicer/OrcaSlicer
+          ref: main
+          fetch-depth: 0
+          lfs: 'false'
+          persist-credentials: false
+
+      - name: Add Bambu Connect export when needed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -B custom-nightly origin/main
+
+          # If Orca merges the feature later, do not apply the old PR on top of it.
+          $featureAlreadyInMain = Select-String `
+            -Path "src/libslic3r/AppConfig.cpp" `
+            -Pattern 'show_bambu_connect_export' `
+            -Quiet
+
+          if ($featureAlreadyInMain) {
+            Write-Host "Bambu Connect export is already present in official Orca main. No PR patch is needed."
+          }
+          else {
+            $prRef = "origin/pr-$env:BAMBU_PR"
+            git fetch origin "pull/$env:BAMBU_PR/head:refs/remotes/$prRef" --force
+
+            $mergeBase = (git merge-base origin/main $prRef).Trim()
+            if (-not $mergeBase) {
+              throw "Could not determine the merge base for Bambu Connect PR #$env:BAMBU_PR."
+            }
+
+            $commits = @(git rev-list --reverse --ancestry-path "$mergeBase..$prRef")
+            if ($commits.Count -eq 0) {
+              throw "No Bambu Connect commits were found in PR #$env:BAMBU_PR."
+            }
+
+            Write-Host "Applying $($commits.Count) Bambu Connect commit(s)."
+
+            foreach ($commit in $commits) {
+              git merge-base --is-ancestor $commit origin/main 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "Skipping $commit because it is already in main."
+                continue
+              }
+
+              git cherry-pick $commit
+              if ($LASTEXITCODE -ne 0) {
+                $conflicts = @(git diff --name-only --diff-filter=U)
+
+                if ($conflicts.Count -gt 0) {
+                  git cherry-pick --abort
+                  throw "Bambu Connect PR #$env:BAMBU_PR conflicts with the newest Orca main. The last good release was left untouched."
+                }
+
+                # Handles an empty cherry-pick if Orca has already absorbed the same change.
+                git cherry-pick --skip
+              }
+            }
+          }
+
+          $upstreamSha = (git rev-parse origin/main).Trim()
+          $customSha = (git rev-parse HEAD).Trim()
+
+          "UPSTREAM_SHA=$upstreamSha" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "CUSTOM_SHA=$customSha"     | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Update custom branch in CodyPrince/OrcaSlicer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git remote add fork "https://x-access-token:$env:GH_TOKEN@github.com/$env:GITHUB_REPOSITORY.git"
+          git push --force fork "HEAD:refs/heads/$env:CUSTOM_BRANCH"
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: "~4.3.0"
+          useLocalCache: true
+          useCloudCache: true
+
+      - name: Set up MSVC
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Restore Orca dependency cache
+        id: deps-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
+          key: windows-x64-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+
+      - name: Build Orca dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install strawberryperl -y --no-progress
+          .\build_release_vs.bat deps
+          .\build_release_vs.bat pack
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+
+      - name: Build OrcaSlicer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\build_release_vs.bat slicer
+
+      - name: Read Orca version
+        shell: pwsh
+        run: |
+          $versionContent = Get-Content version.inc -Raw
+          if ($versionContent -notmatch 'set\(SoftFever_VERSION "(.*?)"\)') {
+            throw "Could not read OrcaSlicer version from version.inc"
+          }
+
+          $orcaVersion = "V$($matches[1])"
+          $buildDate = Get-Date -Format 'yyyy-MM-dd'
+
+          "ORCA_VERSION=$orcaVersion" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+          "BUILD_DATE=$buildDate"     | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Create Windows installer
+        working-directory: ${{ github.workspace }}/build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cpack -G NSIS
+
+      - name: Prepare installer and portable ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          $installer = Get-ChildItem -Path build -Filter 'OrcaSlicer*.exe' -File |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "The Windows installer was not produced."
+          }
+
+          Copy-Item `
+            $installer.FullName `
+            "dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64.exe" `
+            -Force
+
+          Push-Location build
+          & "C:\Program Files\7-Zip\7z.exe" a -tzip `
+            "$env:GITHUB_WORKSPACE\dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64_portable.zip" `
+            "OrcaSlicer"
+          if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            throw "7-Zip failed while creating the portable build."
+          }
+          Pop-Location
+
+          @"
+          Cody custom OrcaSlicer nightly
+          Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss K')
+          Orca version: $env:ORCA_VERSION
+          Official Orca main: $env:UPSTREAM_SHA
+          Custom commit: $env:CUSTOM_SHA
+          Bambu Connect source: OrcaSlicer PR #$env:BAMBU_PR
+          Custom branch: $env:CUSTOM_BRANCH
+          "@ | Set-Content -Path "dist\BUILD_INFO.txt" -Encoding utf8
+
+      - name: Save workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Cody-Custom-Orca-Windows-x64-${{ env.BUILD_DATE }}
+          path: dist/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Update rolling latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # The custom commit already exists in the fork because the custom branch
+          # was pushed earlier in this job.
+          git tag -f custom-nightly-latest $env:CUSTOM_SHA
+          git push --force fork refs/tags/custom-nightly-latest
+
+          $shortSha = $env:CUSTOM_SHA.Substring(0, 7)
+          $notes = @"
+          Automatic Windows x64 build of the latest official OrcaSlicer main with
+          Bambu Connect export from PR #$env:BAMBU_PR added when it is not already
+          present upstream.
+
+          Orca version: $env:ORCA_VERSION
+          Official Orca main: $env:UPSTREAM_SHA
+          Custom commit: $env:CUSTOM_SHA
+          Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss K')
+          "@
+
+          $notes | Set-Content -Path release-notes.md -Encoding utf8
+
+          gh release view custom-nightly-latest --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit custom-nightly-latest `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "OrcaSlicer Custom Nightly - Bambu Connect ($shortSha)" `
+              --notes-file release-notes.md `
+              --prerelease
+          }
+          else {
+            gh release create custom-nightly-latest `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "OrcaSlicer Custom Nightly - Bambu Connect ($shortSha)" `
+              --notes-file release-notes.md `
+              --prerelease
+          }
+
+          gh release upload custom-nightly-latest `
+            "dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64.exe" `
+            "dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64_portable.zip" `
+            "dist\BUILD_INFO.txt" `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
