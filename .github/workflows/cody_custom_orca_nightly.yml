@@ -48,7 +48,6 @@ jobs:
 
           git checkout -B custom-nightly origin/main
 
-          # If Orca merges the feature later, do not apply the old PR on top of it.
           $featureAlreadyInMain = Select-String `
             -Path "src/libslic3r/AppConfig.cpp" `
             -Pattern 'show_bambu_connect_export' `
@@ -89,7 +88,6 @@ jobs:
                   throw "Bambu Connect PR #$env:BAMBU_PR conflicts with the newest Orca main. The last good release was left untouched."
                 }
 
-                # Handles an empty cherry-pick if Orca has already absorbed the same change.
                 git cherry-pick --skip
               }
             }
@@ -120,12 +118,18 @@ jobs:
       - name: Set up MSVC
         uses: microsoft/setup-msbuild@v3
 
+      - name: Compute Orca dependency cache key
+        id: deps-key
+        shell: pwsh
+        run: |
+          "key=windows-x64-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}" | Out-File -Append -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+
       - name: Restore Orca dependency cache
         id: deps-cache
         uses: actions/cache@v6
         with:
           path: ${{ github.workspace }}/deps/build/OrcaSlicer_dep
-          key: windows-x64-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }}
+          key: ${{ steps.deps-key.outputs.key }}
 
       - name: Build Orca dependencies
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -223,8 +227,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          # The custom commit already exists in the fork because the custom branch
-          # was pushed earlier in this job.
           git tag -f custom-nightly-latest $env:CUSTOM_SHA
           git push --force fork refs/tags/custom-nightly-latest
 
