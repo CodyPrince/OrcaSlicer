@@ -5,13 +5,13 @@ index b35a754c2b3..a7a77a60c66 100644
 @@ -272,6 +272,9 @@ void AppConfig::set_defaults()
      if (get("enable_multi_machine").empty())
          set_bool("enable_multi_machine", false);
-
+ 
 +    if (get("show_bambu_connect_export").empty())
 +        set_bool("show_bambu_connect_export", false);
 +
      if (get("drc_bits").empty())
          set("drc_bits", DRC_BITS_DEFAULT_STR);
-
+ 
 diff --git a/src/libslic3r/PresetBundle.cpp b/src/libslic3r/PresetBundle.cpp
 index 5e0ab158499..4489f79a1c9 100644
 --- a/src/libslic3r/PresetBundle.cpp
@@ -19,7 +19,7 @@ index 5e0ab158499..4489f79a1c9 100644
 @@ -602,7 +602,7 @@ Semver PresetBundle::get_vendor_profile_version(std::string vendor_name)
      return result_ver;
  }
-
+ 
 -VendorType PresetBundle::get_current_vendor_type()
 +VendorType PresetBundle::get_current_vendor_type() const
  {
@@ -31,14 +31,14 @@ index 220de95b781..48a3115e82e 100644
 +++ b/src/libslic3r/PresetBundle.hpp
 @@ -255,9 +255,9 @@ class PresetBundle
      std::optional<FilamentBaseInfo> get_filament_by_filament_id(const std::string& filament_id, const std::string& printer_name = std::string()) const;
-
+ 
      // Orca: get vendor type
 -    VendorType get_current_vendor_type();
 +    VendorType get_current_vendor_type() const;
      // Vendor related handy functions
 -    bool is_bbl_vendor() { return get_current_vendor_type() == VendorType::Marlin_BBL; }
 +    bool is_bbl_vendor() const { return get_current_vendor_type() == VendorType::Marlin_BBL; }
-
+ 
      // Whether using bbl network for print upload
      bool use_bbl_network();
 diff --git a/src/slic3r/GUI/GLToolbar.cpp b/src/slic3r/GUI/GLToolbar.cpp
@@ -74,13 +74,13 @@ index 4ad146f5778..b74f5b1f75d 100644
  #include "libslic3r/SLAPrint.hpp"
  #include "libslic3r/PresetBundle.hpp"
 +#include "libslic3r/AppConfig.hpp"
-
+ 
  #include "Tab.hpp"
  #include "ProgressStatusBar.hpp"
 @@ -1720,6 +1721,12 @@ bool MainFrame::can_export_all_gcode() const
      return part_plate_list.is_all_slice_results_ready_for_print();
  }
-
+ 
 +bool MainFrame::can_export_to_bambu_connect() const
 +{
 +    const PresetBundle* preset_bundle = wxGetApp().preset_bundle;
@@ -102,7 +102,7 @@ index 4ad146f5778..b74f5b1f75d 100644
 @@ -2106,6 +2115,18 @@ wxBoxSizer* MainFrame::create_side_tools()
                      p->Dismiss();
                      });
-
+ 
 +                SideButton* bambu_connect_export_btn = new SideButton(p, _L("Bambu Connect: Export"), "");
 +                bambu_connect_export_btn->SetCornerRadius(0);
 +                bambu_connect_export_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
@@ -117,7 +117,7 @@ index 4ad146f5778..b74f5b1f75d 100644
 +
                  bool support_send = true;
                  bool support_print_all = true;
-
+ 
 @@ -2148,6 +2169,8 @@ wxBoxSizer* MainFrame::create_side_tools()
                  }
                  p->append_button(export_sliced_file_btn);
@@ -143,7 +143,7 @@ index 4ad146f5778..b74f5b1f75d 100644
 @@ -2763,6 +2792,13 @@ void MainFrame::init_menubar_as_editor()
              [this](wxCommandEvent&) { if (m_plater) wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_ALL_SLICED_FILE)); }, "menu_export_sliced_file", nullptr,
              [this]() {return can_export_all_gcode(); }, this);
-
+ 
 +        wxMenuItem* bambu_connect_export_menu = append_menu_item(export_menu, wxID_ANY, _L("Bambu Connect: Export"), _L("Export current plate sliced file and open it in Bambu Connect"),
 +            [this](wxCommandEvent&) { if (m_plater) wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT)); }, "menu_export_sliced_file", nullptr,
 +            [this]() { return can_export_to_bambu_connect(); }, this);
@@ -174,7 +174,7 @@ index 20229a611e7..5ef73325345 100644
 +        ePrintMultiMachine   = 9,
 +        eBambuConnectExport  = 10,
      };
-
+ 
      void update_layout();
 diff --git a/src/slic3r/GUI/Plater.cpp b/src/slic3r/GUI/Plater.cpp
 index a015c8624e1..1a9b69eefb9 100644
@@ -195,11 +195,11 @@ index a015c8624e1..1a9b69eefb9 100644
 +        q->Bind(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT, &priv::on_action_bambu_connect_export, this);
          //q->Bind(EVT_GLVIEWTOOLBAR_ASSEMBLE, [q](SimpleEvent&) { q->select_view_3D("Assemble"); });
      }
-
+ 
 @@ -10340,6 +10342,14 @@ void Plater::priv::on_action_export_all_sliced_file(SimpleEvent &)
      }
  }
-
+ 
 +void Plater::priv::on_action_bambu_connect_export(SimpleEvent&)
 +{
 +    if (q != nullptr) {
@@ -214,7 +214,7 @@ index a015c8624e1..1a9b69eefb9 100644
 @@ -15003,6 +15013,50 @@ void Plater::export_gcode_3mf(bool export_all)
      }
  }
-
+ 
 +void Plater::export_gcode_3mf_to_bambu_connect()
 +{
 +    if (!wxGetApp().preset_bundle || !wxGetApp().preset_bundle->is_bbl_vendor())
@@ -281,7 +281,7 @@ index 206549cf176..8bb44f4972d 100644
 @@ -1435,6 +1435,11 @@ void PreferencesDialog::create_items()
      auto item_multi_machine    = create_item_checkbox(_L("Multi device management"), _L("With this option enabled, you can send a task to multiple devices at the same time and manage multiple devices."), "enable_multi_machine", _L("(Requires restart)"));
      g_sizer->Add(item_multi_machine);
-
+ 
 +    auto item_bambu_connect_export = create_item_checkbox(_L("Show Bambu Connect export"),
 +        _L("If enabled, adds an option to export the sliced plate and open it in Bambu Connect."),
 +        "show_bambu_connect_export");
