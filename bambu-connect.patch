@@ -1,0 +1,292 @@
+diff --git a/src/libslic3r/AppConfig.cpp b/src/libslic3r/AppConfig.cpp
+index b35a754c2b3..a7a77a60c66 100644
+--- a/src/libslic3r/AppConfig.cpp
++++ b/src/libslic3r/AppConfig.cpp
+@@ -272,6 +272,9 @@ void AppConfig::set_defaults()
+     if (get("enable_multi_machine").empty())
+         set_bool("enable_multi_machine", false);
+
++    if (get("show_bambu_connect_export").empty())
++        set_bool("show_bambu_connect_export", false);
++
+     if (get("drc_bits").empty())
+         set("drc_bits", DRC_BITS_DEFAULT_STR);
+
+diff --git a/src/libslic3r/PresetBundle.cpp b/src/libslic3r/PresetBundle.cpp
+index 5e0ab158499..4489f79a1c9 100644
+--- a/src/libslic3r/PresetBundle.cpp
++++ b/src/libslic3r/PresetBundle.cpp
+@@ -602,7 +602,7 @@ Semver PresetBundle::get_vendor_profile_version(std::string vendor_name)
+     return result_ver;
+ }
+
+-VendorType PresetBundle::get_current_vendor_type()
++VendorType PresetBundle::get_current_vendor_type() const
+ {
+     auto        t      = VendorType::Unknown;
+     auto        config = &printers.get_edited_preset().config;
+diff --git a/src/libslic3r/PresetBundle.hpp b/src/libslic3r/PresetBundle.hpp
+index 220de95b781..48a3115e82e 100644
+--- a/src/libslic3r/PresetBundle.hpp
++++ b/src/libslic3r/PresetBundle.hpp
+@@ -255,9 +255,9 @@ class PresetBundle
+     std::optional<FilamentBaseInfo> get_filament_by_filament_id(const std::string& filament_id, const std::string& printer_name = std::string()) const;
+
+     // Orca: get vendor type
+-    VendorType get_current_vendor_type();
++    VendorType get_current_vendor_type() const;
+     // Vendor related handy functions
+-    bool is_bbl_vendor() { return get_current_vendor_type() == VendorType::Marlin_BBL; }
++    bool is_bbl_vendor() const { return get_current_vendor_type() == VendorType::Marlin_BBL; }
+
+     // Whether using bbl network for print upload
+     bool use_bbl_network();
+diff --git a/src/slic3r/GUI/GLToolbar.cpp b/src/slic3r/GUI/GLToolbar.cpp
+index 234340dc6b6..bb51dd6119c 100644
+--- a/src/slic3r/GUI/GLToolbar.cpp
++++ b/src/slic3r/GUI/GLToolbar.cpp
+@@ -28,6 +28,7 @@ wxDEFINE_EVENT(EVT_GLTOOLBAR_SEND_GCODE, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_UPLOAD_GCODE, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_EXPORT_SLICED_FILE, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_EXPORT_ALL_SLICED_FILE, SimpleEvent);
++wxDEFINE_EVENT(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_PRINT_SELECT, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_SEND_TO_PRINTER, SimpleEvent);
+ wxDEFINE_EVENT(EVT_GLTOOLBAR_SEND_TO_PRINTER_ALL, SimpleEvent);
+diff --git a/src/slic3r/GUI/GLToolbar.hpp b/src/slic3r/GUI/GLToolbar.hpp
+index 85413edc66d..f7bf262588c 100644
+--- a/src/slic3r/GUI/GLToolbar.hpp
++++ b/src/slic3r/GUI/GLToolbar.hpp
+@@ -28,6 +28,7 @@ wxDECLARE_EVENT(EVT_GLTOOLBAR_SEND_GCODE, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_UPLOAD_GCODE, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_EXPORT_SLICED_FILE, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_EXPORT_ALL_SLICED_FILE, SimpleEvent);
++wxDECLARE_EVENT(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_PRINT_SELECT, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_SEND_TO_PRINTER, SimpleEvent);
+ wxDECLARE_EVENT(EVT_GLTOOLBAR_SEND_TO_PRINTER_ALL, SimpleEvent);
+diff --git a/src/slic3r/GUI/MainFrame.cpp b/src/slic3r/GUI/MainFrame.cpp
+index 4ad146f5778..b74f5b1f75d 100644
+--- a/src/slic3r/GUI/MainFrame.cpp
++++ b/src/slic3r/GUI/MainFrame.cpp
+@@ -23,6 +23,7 @@
+ #include "libslic3r/PrintConfig.hpp"
+ #include "libslic3r/SLAPrint.hpp"
+ #include "libslic3r/PresetBundle.hpp"
++#include "libslic3r/AppConfig.hpp"
+
+ #include "Tab.hpp"
+ #include "ProgressStatusBar.hpp"
+@@ -1720,6 +1721,12 @@ bool MainFrame::can_export_all_gcode() const
+     return part_plate_list.is_all_slice_results_ready_for_print();
+ }
+
++bool MainFrame::can_export_to_bambu_connect() const
++{
++    const PresetBundle* preset_bundle = wxGetApp().preset_bundle;
++    return preset_bundle && preset_bundle->is_bbl_vendor() && can_export_gcode();
++}
++
+ bool MainFrame::can_print_3mf() const
+ {
+     if (m_plater && !m_plater->model().objects.empty()) {
+@@ -1948,6 +1955,8 @@ wxBoxSizer* MainFrame::create_side_tools()
+                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_SLICED_FILE));
+             else if (m_print_select == eExportAllSlicedFile)
+                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_ALL_SLICED_FILE));
++            else if (m_print_select == eBambuConnectExport)
++                wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT));
+             else if (m_print_select == eSendToPrinter)
+                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_TO_PRINTER));
+             else if (m_print_select == eSendToPrinterAll)
+@@ -2106,6 +2115,18 @@ wxBoxSizer* MainFrame::create_side_tools()
+                     p->Dismiss();
+                     });
+
++                SideButton* bambu_connect_export_btn = new SideButton(p, _L("Bambu Connect: Export"), "");
++                bambu_connect_export_btn->SetCornerRadius(0);
++                bambu_connect_export_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
++                    m_print_btn->SetLabel(_L("Bambu Connect: Export"));
++                    m_print_select = eBambuConnectExport;
++                    m_print_enable = get_enable_print_status();
++                    m_print_btn->Enable(m_print_enable);
++                    this->Layout();
++                    fit_tab_labels();
++                    p->Dismiss();
++                    });
++
+                 bool support_send = true;
+                 bool support_print_all = true;
+
+@@ -2148,6 +2169,8 @@ wxBoxSizer* MainFrame::create_side_tools()
+                 }
+                 p->append_button(export_sliced_file_btn);
+                 p->append_button(export_all_sliced_file_btn);
++                if (wxGetApp().app_config->get_bool("show_bambu_connect_export"))
++                    p->append_button(bambu_connect_export_btn);
+                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
+                 export_gcode_btn->SetCornerRadius(0);
+                 export_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+@@ -2301,6 +2324,12 @@ bool MainFrame::get_enable_print_status()
+             enable = false;
+         }
+     }
++    else if (m_print_select == eBambuConnectExport)
++    {
++        if (!current_plate->is_slice_result_ready_for_export())
++            enable = false;
++        enable = enable && !is_all_plates;
++    }
+     else if (m_print_select == ePrintMultiMachine)
+     {
+         if (!current_plate->is_slice_result_ready_for_print())
+@@ -2763,6 +2792,13 @@ void MainFrame::init_menubar_as_editor()
+             [this](wxCommandEvent&) { if (m_plater) wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_ALL_SLICED_FILE)); }, "menu_export_sliced_file", nullptr,
+             [this]() {return can_export_all_gcode(); }, this);
+
++        wxMenuItem* bambu_connect_export_menu = append_menu_item(export_menu, wxID_ANY, _L("Bambu Connect: Export"), _L("Export current plate sliced file and open it in Bambu Connect"),
++            [this](wxCommandEvent&) { if (m_plater) wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT)); }, "menu_export_sliced_file", nullptr,
++            [this]() { return can_export_to_bambu_connect(); }, this);
++        this->Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent& evt) {
++            evt.Show(wxGetApp().app_config->get_bool("show_bambu_connect_export"));
++        }, bambu_connect_export_menu->GetId());
++
+         append_menu_item(export_menu, wxID_ANY, _L("Export G-code") + dots/* + "\t" + ctrl + "G"*/, _L("Export current plate as G-code"),
+             [this](wxCommandEvent&) { if (m_plater) m_plater->export_gcode(false); }, "menu_export_gcode", nullptr,
+             [this]() {return can_export_gcode(); }, this);
+diff --git a/src/slic3r/GUI/MainFrame.hpp b/src/slic3r/GUI/MainFrame.hpp
+index 20229a611e7..5ef73325345 100644
+--- a/src/slic3r/GUI/MainFrame.hpp
++++ b/src/slic3r/GUI/MainFrame.hpp
+@@ -131,6 +131,7 @@ class MainFrame : public DPIFrame
+     bool can_export_supports() const;
+     bool can_export_gcode() const;
+     bool can_export_all_gcode() const;
++    bool can_export_to_bambu_connect() const;
+     bool can_print_3mf() const;
+     bool can_send_gcode() const;
+     //bool can_export_gcode_sd() const;
+@@ -249,7 +250,8 @@ class MainFrame : public DPIFrame
+         eSendToPrinterAll    = 6,
+         eUploadGcode         = 7,
+         eExportAllSlicedFile = 8,
+-        ePrintMultiMachine   = 9
++        ePrintMultiMachine   = 9,
++        eBambuConnectExport  = 10,
+     };
+
+     void update_layout();
+diff --git a/src/slic3r/GUI/Plater.cpp b/src/slic3r/GUI/Plater.cpp
+index a015c8624e1..1a9b69eefb9 100644
+--- a/src/slic3r/GUI/Plater.cpp
++++ b/src/slic3r/GUI/Plater.cpp
+@@ -4718,6 +4718,7 @@ struct Plater::priv
+     void on_action_send_gcode(SimpleEvent&);
+     void on_action_export_sliced_file(SimpleEvent&);
+     void on_action_export_all_sliced_file(SimpleEvent&);
++    void on_action_bambu_connect_export(SimpleEvent&);
+     void on_action_select_sliced_plate(wxCommandEvent& evt);
+     //BBS: change dark/light mode
+     void on_change_color_mode(SimpleEvent& evt);
+@@ -5291,6 +5292,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
+         q->Bind(EVT_PUBLISH_FINISHED, [q](wxCommandEvent& evt) { q->publish_job_finished(evt);});
+         q->Bind(EVT_OPEN_PLATESETTINGSDIALOG, [q](wxCommandEvent& evt) { q->open_platesettings_dialog(evt);});
+         q->Bind(EVT_OPEN_FILAMENT_MAP_SETTINGS_DIALOG, [q](wxCommandEvent &evt) { q->open_filament_map_setting_dialog(evt); });
++        q->Bind(EVT_GLTOOLBAR_BAMBU_CONNECT_EXPORT, &priv::on_action_bambu_connect_export, this);
+         //q->Bind(EVT_GLVIEWTOOLBAR_ASSEMBLE, [q](SimpleEvent&) { q->select_view_3D("Assemble"); });
+     }
+
+@@ -10340,6 +10342,14 @@ void Plater::priv::on_action_export_all_sliced_file(SimpleEvent &)
+     }
+ }
+
++void Plater::priv::on_action_bambu_connect_export(SimpleEvent&)
++{
++    if (q != nullptr) {
++        BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received Bambu Connect export event\n";
++        q->export_gcode_3mf_to_bambu_connect();
++    }
++}
++
+ void Plater::priv::on_action_export_to_sdcard(SimpleEvent&)
+ {
+ 	if (q != nullptr) {
+@@ -15003,6 +15013,50 @@ void Plater::export_gcode_3mf(bool export_all)
+     }
+ }
+
++void Plater::export_gcode_3mf_to_bambu_connect()
++{
++    if (!wxGetApp().preset_bundle || !wxGetApp().preset_bundle->is_bbl_vendor())
++        return;
++
++    fs::path output_path = fs::temp_directory_path()
++        / fs::unique_path("." SLIC3R_APP_KEY ".bambu-connect.%%%%-%%%%-%%%%-%%%%.gcode.3mf");
++
++    const std::string export_filename = Slic3r::fold_utf8_to_ascii(
++        into_u8(get_export_gcode_filename(".gcode.3mf", true, false)));
++    std::string display_name = export_filename;
++    if (boost::iends_with(display_name, ".gcode.3mf"))
++        display_name.erase(display_name.size() - 10);
++
++    const bool path_on_removable_media = false;
++    p->notification_manager->new_export_began(path_on_removable_media);
++    p->exporting_status = ExportingStatus::EXPORTING_TO_LOCAL;
++    p->last_output_path = output_path.string();
++    p->last_output_dir_path = output_path.parent_path().string();
++
++    const int plate_idx = get_partplate_list().get_curr_plate_index();
++
++    const int ret = export_3mf(output_path, SaveStrategy::Silence | SaveStrategy::SplitModel | SaveStrategy::WithGcode | SaveStrategy::SkipModel, plate_idx);
++    if (ret < 0) {
++        show_error(this, _L("Failed to export sliced file for Bambu Connect."), false);
++        return;
++    }
++
++    if (!fs::exists(output_path)) {
++        show_error(this, _L("Failed to export sliced file for Bambu Connect."), false);
++        return;
++    }
++
++    const std::string url = "bambu-connect://import-file?path=" + Http::url_encode(output_path.string())
++        + "&name=" + Http::url_encode(display_name)
++        + "&version=1.0.0";
++    if (!wxLaunchDefaultBrowser(from_u8(url))) {
++        show_error(this, _L("Failed to open Bambu Connect. Please make sure Bambu Connect is installed."), false);
++        return;
++    }
++
++    p->notification_manager->push_exporting_finished_notification(export_filename, p->last_output_dir_path, false);
++}
++
+ void Plater::send_gcode_finish(wxString name)
+ {
+     auto out_str = GUI::format(_L("The file %s has been sent to the printer's storage space and can be viewed on the printer."), name);
+diff --git a/src/slic3r/GUI/Plater.hpp b/src/slic3r/GUI/Plater.hpp
+index f2089c1c4fa..7ef2f022838 100644
+--- a/src/slic3r/GUI/Plater.hpp
++++ b/src/slic3r/GUI/Plater.hpp
+@@ -484,6 +484,7 @@ class Plater: public wxPanel
+     void send_to_printer(bool isall = false);
+     void export_gcode(bool prefer_removable);
+     void export_gcode_3mf(bool export_all = false);
++    void export_gcode_3mf_to_bambu_connect();
+     void send_gcode_finish(wxString name);
+     void export_core_3mf();
+     static TriangleMesh combine_mesh_fff(const ModelObject& mo, int instance_id, std::function<void(const std::string&)> notify_func = {});
+diff --git a/src/slic3r/GUI/Preferences.cpp b/src/slic3r/GUI/Preferences.cpp
+index 206549cf176..8bb44f4972d 100644
+--- a/src/slic3r/GUI/Preferences.cpp
++++ b/src/slic3r/GUI/Preferences.cpp
+@@ -1435,6 +1435,11 @@ void PreferencesDialog::create_items()
+     auto item_multi_machine    = create_item_checkbox(_L("Multi device management"), _L("With this option enabled, you can send a task to multiple devices at the same time and manage multiple devices."), "enable_multi_machine", _L("(Requires restart)"));
+     g_sizer->Add(item_multi_machine);
+
++    auto item_bambu_connect_export = create_item_checkbox(_L("Show Bambu Connect export"),
++        _L("If enabled, adds an option to export the sliced plate and open it in Bambu Connect."),
++        "show_bambu_connect_export");
++    g_sizer->Add(item_bambu_connect_export);
++
+ #if 0
+     g_sizer->Add(create_item_title(_L("Filament Grouping")), 1, wxEXPAND);
+     //temporarily disable it
