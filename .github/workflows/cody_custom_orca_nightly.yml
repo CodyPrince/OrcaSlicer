@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/cody_custom_orca_nightly.yml'
       - 'bambu-connect.patch'
+      - 'apply-bambu-connect.py'
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * *'
@@ -26,7 +27,7 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Checkout our saved Bambu Connect patch
+      - name: Checkout our saved Bambu Connect files
         uses: actions/checkout@v7
         with:
           repository: ${{ github.repository }}
@@ -35,6 +36,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             bambu-connect.patch
+            apply-bambu-connect.py
           sparse-checkout-cone-mode: false
           path: controller
 
@@ -64,18 +66,14 @@ jobs:
           }
           else {
             $patch = "$env:GITHUB_WORKSPACE\controller\bambu-connect.patch"
+            $applier = "$env:GITHUB_WORKSPACE\controller\apply-bambu-connect.py"
 
-            git apply --check --3way $patch
+            python $applier $patch $env:GITHUB_WORKSPACE\source
             if ($LASTEXITCODE -ne 0) {
-              throw "Our saved Bambu Connect patch no longer applies cleanly to the newest Orca main. The build is stopping rather than producing a questionable build."
+              throw "Our saved Bambu Connect feature could not be safely applied to the newest Orca main."
             }
 
-            git apply --3way $patch
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to apply our saved Bambu Connect patch."
-            }
-
-            Write-Host "Applied our permanently saved Bambu Connect patch."
+            Write-Host "Applied our permanently saved Bambu Connect feature."
           }
 
           $upstreamSha = (git rev-parse HEAD).Trim()
