@@ -196,46 +196,93 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Update rolling latest release
+      - name: Publish fresh rolling release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
+          $builtUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'")
+          $buildDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
           $shortSha = $env:UPSTREAM_SHA.Substring(0, 7)
-          $notes = @"
-          Automatic Windows x64 build of the latest official OrcaSlicer main with
-          Cody's permanently saved Bambu Connect patch.
+          $repo = $env:GITHUB_REPOSITORY
 
-          Orca version: $env:ORCA_VERSION
-          Official Orca main: $env:UPSTREAM_SHA
-          Saved patch SHA256: $env:PATCH_SHA
-          Built: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss K')
+          # Give the rolling tag a fresh commit timestamp without adding daily
+          # commits to main. The commit reuses the current main tree unchanged.
+          Push-Location "$env:GITHUB_WORKSPACE\controller"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $parentSha = (git rev-parse HEAD).Trim()
+          $treeSha = (git rev-parse "HEAD^{tree}").Trim()
+          $markerMessage = "Latest successful custom build - $builtUtc"
+          $markerSha = ($markerMessage | git commit-tree $treeSha -p $parentSha).Trim()
+          if (-not $markerSha) {
+            Pop-Location
+            throw "Could not create the fresh release marker commit."
+          }
+
+          git remote set-url origin "https://x-access-token:$env:GH_TOKEN@github.com/$repo.git"
+          git tag -f custom-nightly-latest $markerSha
+          git push --force origin refs/tags/custom-nightly-latest
+          if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            throw "Could not refresh the custom-nightly-latest tag."
+          }
+          Pop-Location
+
+          $installerUrl = "https://github.com/$repo/releases/download/custom-nightly-latest/OrcaSlicer_Custom_Nightly_Bambu_Connect_x64.exe"
+          $portableUrl = "https://github.com/$repo/releases/download/custom-nightly-latest/OrcaSlicer_Custom_Nightly_Bambu_Connect_x64_portable.zip"
+
+          $notes = @"
+          ## Fresh automatic build
+
+          **Last successful build:** $builtUtc  
+          **Orca version:** $env:ORCA_VERSION  
+          **Official Orca main:** $env:UPSTREAM_SHA  
+
+          This is an **unofficial community Windows x64 build** of the latest official OrcaSlicer main with the saved Bambu Connect export feature applied. It is rebuilt daily. This rolling release is recreated after every successful build, so this page and the download links always point to the newest successful build.
+
+          ### Download
+
+          **[Windows installer (recommended)]($installerUrl)**  
+          **[Portable ZIP]($portableUrl)**
+
+          ### Bambu Connect feature
+
+          The Bambu Connect changes are permanently saved in this public fork as **bambu-connect.patch** and are applied safely by **apply-bambu-connect.py**. The build stops instead of forcing the patch if Orca changes enough that the feature can no longer be applied safely.
+
+          ### Source / build information
+
+          Exact build input: official Orca commit **$env:UPSTREAM_SHA** + saved patch SHA256 **$env:PATCH_SHA**.
+
+          GitHub automatically shows **Source code (zip)** and **Source code (tar.gz)** below. Those are snapshots of this fork's build recipe. For the exact Orca source used by the binary, use the official Orca commit listed above together with the public saved patch and applier in this repository.
+
+          Credit for the Bambu Connect export feature goes to @ybznek / OrcaSlicer PR #13811. This is not an official OrcaSlicer release and support is not expected from the OrcaSlicer maintainers.
           "@
 
           $notes | Set-Content -Path release-notes.md -Encoding utf8
 
-          gh release view custom-nightly-latest --repo $env:GITHUB_REPOSITORY *> $null
+          # Editing a GitHub release does not refresh its visible published age.
+          # Delete and recreate the same rolling release so "released ... ago"
+          # and the automatic source archive timestamps stay fresh.
+          gh release view custom-nightly-latest --repo $repo *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release edit custom-nightly-latest `
-              --repo $env:GITHUB_REPOSITORY `
-              --title "OrcaSlicer Custom Nightly - Bambu Connect ($shortSha)" `
-              --notes-file release-notes.md `
-              --prerelease
-          }
-          else {
-            gh release create custom-nightly-latest `
-              --repo $env:GITHUB_REPOSITORY `
-              --target main `
-              --title "OrcaSlicer Custom Nightly - Bambu Connect ($shortSha)" `
-              --notes-file release-notes.md `
-              --prerelease
+            gh release delete custom-nightly-latest --repo $repo --yes
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not remove the previous rolling release."
+            }
           }
 
-          gh release upload custom-nightly-latest `
+          gh release create custom-nightly-latest `
             "$env:GITHUB_WORKSPACE\dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64.exe" `
             "$env:GITHUB_WORKSPACE\dist\OrcaSlicer_Custom_Nightly_Bambu_Connect_x64_portable.zip" `
             "$env:GITHUB_WORKSPACE\dist\BUILD_INFO.txt" `
-            --repo $env:GITHUB_REPOSITORY `
-            --clobber
+            --repo $repo `
+            --title "Latest OrcaSlicer + Bambu Connect - $buildDate ($shortSha)" `
+            --notes-file release-notes.md `
+            --prerelease
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not publish the fresh rolling release."
+          }
