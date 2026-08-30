@@ -127,7 +127,9 @@ jobs:
               git apply "$normalizedPatchPath"
               if ($LASTEXITCODE -ne 0) { throw 'Failed to apply H2C camera patch.' }
 
-              git diff --check
+              # The Windows worktree uses CRLF. Tell Git that CR at EOL is
+              # expected so diff --check still catches real whitespace errors.
+              git -c core.whitespace=cr-at-eol diff --check
               if ($LASTEXITCODE -ne 0) { throw 'H2C camera patch produced a whitespace/error check failure.' }
             }
             finally {
