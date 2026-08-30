@@ -16,7 +16,7 @@ diff --git a/stubs/dshow_filter.cpp b/stubs/dshow_filter.cpp
          if (e == std::string::npos) break;
          i = e + 1;
      }
-
+ 
 +    // OBN's get_camera_url fallback intentionally uses one local URL for
 +    // both the file-browser/control path and live video. H-series and
 +    // other H.264 printers carry an lv=rtsps/rtsp hint on that URL.
