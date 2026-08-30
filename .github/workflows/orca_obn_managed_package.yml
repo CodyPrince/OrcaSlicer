@@ -1,4 +1,4 @@
-name: Orca + OBN Managed Package
+﻿name: Orca + OBN Managed Package
 
 on:
   workflow_dispatch:
@@ -65,6 +65,14 @@ jobs:
 
             $fixSha = (git rev-parse FETCH_HEAD).Trim()
             if ($LASTEXITCODE -ne 0) { throw 'Could not read printer-selection fix SHA.' }
+
+            # GitHub-hosted runners do not have a committer identity by default.
+            # --no-ff merge preparation still requires one even though we stop
+            # before committing the temporary merge.
+            git config user.name 'Orca OBN Managed Build'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not configure CI Git user.name.' }
+            git config user.email 'actions@github.com'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not configure CI Git user.email.' }
 
             git merge --no-commit --no-ff FETCH_HEAD
             if ($LASTEXITCODE -ne 0) {
