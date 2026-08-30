@@ -1,4 +1,4 @@
-﻿name: Orca + OBN Managed Package
+name: Orca + OBN Managed Package
 
 on:
   workflow_dispatch:
@@ -94,6 +94,18 @@ jobs:
           $sourcePath = "$env:GITHUB_WORKSPACE\obn\stubs\dshow_filter.cpp"
           $patchPath  = "$env:GITHUB_WORKSPACE\managed-package\obn-h2c-camera-dshow.patch"
 
+          # actions/checkout on Windows may materialize text files as CRLF.
+          # A unified diff must be applied with LF line endings or the CR
+          # becomes trailing whitespace in every added source line.
+          $normalizedPatchPath = Join-Path $env:RUNNER_TEMP 'obn-h2c-camera-dshow-lf.patch'
+          $patchText = [System.IO.File]::ReadAllText($patchPath)
+          $patchText = $patchText.Replace("`r`n", "`n").Replace("`r", "`n")
+          [System.IO.File]::WriteAllText(
+            $normalizedPatchPath,
+            $patchText,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
           $source = Get-Content -LiteralPath $sourcePath -Raw
           $hasLvField    = $source.Contains('std::string lv;')
           $hasLvParse    = $source.Contains('else if (k == "lv") out->lv = v;')
@@ -107,12 +119,12 @@ jobs:
           else {
             Push-Location "$env:GITHUB_WORKSPACE\obn"
             try {
-              git apply --check "$patchPath"
+              git apply --check "$normalizedPatchPath"
               if ($LASTEXITCODE -ne 0) {
                 throw 'Saved H2C camera patch no longer applies cleanly to current upstream OBN. Managed build stopped for review.'
               }
 
-              git apply "$patchPath"
+              git apply "$normalizedPatchPath"
               if ($LASTEXITCODE -ne 0) { throw 'Failed to apply H2C camera patch.' }
 
               git diff --check
@@ -134,7 +146,7 @@ jobs:
             throw 'Final DirectShow source does not contain the required H2C camera routing logic.'
           }
 
-          $patchSha = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $patchSha = (Get-FileHash -LiteralPath $normalizedPatchPath -Algorithm SHA256).Hash.ToLowerInvariant()
           "CAMERA_PATCH_STATE=$state" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
           "CAMERA_PATCH_SHA=$patchSha" | Out-File -Append -FilePath $env:GITHUB_ENV -Encoding utf8
 
